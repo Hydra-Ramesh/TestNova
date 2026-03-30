@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Optional
 import os
 
 
@@ -9,11 +9,11 @@ class Settings(BaseSettings):
     groq_generation_model: str = "llama-3.3-70b-versatile"
     groq_chat_model: str = "llama-3.1-8b-instant"
 
-    # Qdrant
-    qdrant_host: str = "localhost"
-    qdrant_port: int = 6333
+    # Qdrant Cloud
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
 
-    # Redis
+    # Redis (kept for backwards compat)
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_password: str = ""

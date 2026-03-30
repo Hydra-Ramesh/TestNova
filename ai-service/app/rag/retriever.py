@@ -1,4 +1,4 @@
-"""Vector DB retriever using Qdrant."""
+"""Vector DB retriever using Qdrant Cloud."""
 
 import logging
 from typing import List, Dict, Optional
@@ -19,10 +19,14 @@ class VectorRetriever:
             from qdrant_client import QdrantClient
             from qdrant_client.models import Distance, VectorParams
 
+            if not settings.qdrant_url:
+                logger.warning("⚠️ QDRANT_URL not set. Vector search disabled.")
+                return
+
             self.client = QdrantClient(
-                host=settings.qdrant_host,
-                port=settings.qdrant_port,
-                timeout=5,
+                url=settings.qdrant_url,
+                api_key=settings.qdrant_api_key if settings.qdrant_api_key else None,
+                timeout=10,
             )
 
             # Create collection if not exists
@@ -35,7 +39,7 @@ class VectorRetriever:
                 )
                 logger.info(f"✅ Created Qdrant collection: {COLLECTION_NAME}")
             else:
-                logger.info(f"✅ Qdrant collection exists: {COLLECTION_NAME}")
+                logger.info(f"✅ Qdrant Cloud connected — collection: {COLLECTION_NAME}")
 
         except Exception as e:
             logger.warning(f"⚠️ Qdrant not available: {e}. Vector search disabled.")
