@@ -36,6 +36,7 @@ const io = new Server(httpServer, {
 });
 
 // Middleware
+app.set('trust proxy', 1); // Trust first proxy (Render/Nginx)
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({
   origin: allowedOrigins,
