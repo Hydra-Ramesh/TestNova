@@ -4,9 +4,9 @@ import { HiAcademicCap, HiLightningBolt, HiAdjustments, HiPlay } from 'react-ico
 import api from '../services/api.js';
 
 const EXAMS = [
-  { id: 'jee_main', name: 'JEE Main', desc: '180 min • 90 questions • 300 marks', color: 'from-blue-500 to-indigo-600', icon: '🎯' },
-  { id: 'jee_advanced', name: 'JEE Advanced', desc: '180 min • 54 questions • 186 marks', color: 'from-purple-500 to-pink-600', icon: '🚀' },
-  { id: 'neet', name: 'NEET', desc: '200 min • 200 questions • 720 marks', color: 'from-emerald-500 to-teal-600', icon: '🧬' },
+  { id: 'jee_main', name: 'JEE Main', desc: '3 hrs • 90 Qs (75 attempt) • 300 marks', detail: 'MCQ + Numerical | -1 for wrong MCQ', color: 'from-blue-500 to-indigo-600', icon: '🎯' },
+  { id: 'jee_advanced', name: 'JEE Advanced', desc: '3+3 hrs • 2 Papers • ~108 Qs', detail: 'SC + MC + Numerical + Matrix | Partial marking', color: 'from-purple-500 to-pink-600', icon: '🚀' },
+  { id: 'neet', name: 'NEET', desc: '3h 20m • 200 Qs (180 attempt) • 720 marks', detail: 'MCQ only | +4 correct, -1 wrong', color: 'from-emerald-500 to-teal-600', icon: '🧬' },
 ];
 
 const TEST_TYPES = [
@@ -102,6 +102,7 @@ export default function ExamSelectionPage() {
                 <span className="text-3xl mb-3 block">{exam.icon}</span>
                 <h3 className="text-lg font-bold mb-1">{exam.name}</h3>
                 <p className="text-sm text-gray-400">{exam.desc}</p>
+                {exam.detail && <p className="text-xs text-gray-500 mt-1">{exam.detail}</p>}
               </button>
             ))}
           </div>
