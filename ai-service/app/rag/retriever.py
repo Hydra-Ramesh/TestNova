@@ -38,8 +38,19 @@ class VectorRetriever:
                     vectors_config=VectorParams(size=384, distance=Distance.COSINE),
                 )
                 logger.info(f"✅ Created Qdrant collection: {COLLECTION_NAME}")
-            else:
-                logger.info(f"✅ Qdrant Cloud connected — collection: {COLLECTION_NAME}")
+
+            # Ensure payload indexes exist for filtering
+            from qdrant_client.models import PayloadSchemaType
+            for field in ["subject", "exam_type", "chapter"]:
+                try:
+                    self.client.create_payload_index(
+                        collection_name=COLLECTION_NAME,
+                        field_name=field,
+                        field_schema=PayloadSchemaType.KEYWORD,
+                    )
+                except Exception:
+                    pass  # Index already exists
+            logger.info(f"✅ Qdrant Cloud connected — collection: {COLLECTION_NAME}")
 
         except Exception as e:
             logger.warning(f"⚠️ Qdrant not available: {e}. Vector search disabled.")
