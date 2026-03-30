@@ -19,9 +19,9 @@ services:
       - key: RESEND_API_KEY
         sync: false
       - key: AI_SERVICE_URL
-        sync: false
+        value: https://test-nova-ai.onrender.com
       - key: CLIENT_URL
-        sync: false
+        value: https://test-nova-gamma.vercel.app
 
   - type: web
     name: testnova-ai

@@ -2,11 +2,15 @@ import { io } from 'socket.io-client';
 
 let socket = null;
 
+const BACKEND_URL = import.meta.env.PROD
+  ? 'https://testnova-a1un.onrender.com'
+  : window.location.origin;
+
 export const connectSocket = () => {
   const token = localStorage.getItem('testnova_token');
   if (!token || socket?.connected) return socket;
 
-  socket = io(window.location.origin, {
+  socket = io(BACKEND_URL, {
     auth: { token },
     transports: ['websocket', 'polling'],
   });

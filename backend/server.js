@@ -21,9 +21,15 @@ import { setupExamSocket } from './sockets/examSocket.js';
 const app = express();
 const httpServer = createServer(app);
 
+const allowedOrigins = [
+  process.env.CLIENT_URL || 'http://localhost:5173',
+  'http://localhost:5173',
+  'https://test-nova-gamma.vercel.app',
+];
+
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: allowedOrigins,
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -32,7 +38,7 @@ const io = new Server(httpServer, {
 // Middleware
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: allowedOrigins,
   credentials: true,
 }));
 app.use(compression());
