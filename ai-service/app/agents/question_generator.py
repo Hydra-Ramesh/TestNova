@@ -6,6 +6,7 @@ Uses official exam patterns for JEE Main, JEE Advanced, and NEET.
 
 import json
 import logging
+import re
 import hashlib
 from typing import List, Dict, Optional
 from app.services.groq_manager import groq_manager
@@ -13,6 +14,63 @@ from app.rag.pipeline import rag_pipeline
 from app.services.cache_service import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_questions_json(text: str) -> Optional[List[Dict]]:
+    """Robustly extract a JSON array of questions from LLM output."""
+    if not text:
+        return None
+
+    # Strategy 1: Direct parse
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            for key in ["questions", "data", "result"]:
+                if key in parsed and isinstance(parsed[key], list):
+                    return parsed[key]
+            # Try first list value
+            for v in parsed.values():
+                if isinstance(v, list):
+                    return v
+        if isinstance(parsed, list):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: Extract JSON array from text
+    try:
+        start = text.index("[")
+        end = text.rindex("]") + 1
+        return json.loads(text[start:end])
+    except (ValueError, json.JSONDecodeError):
+        pass
+
+    # Strategy 3: Extract JSON object containing array
+    try:
+        start = text.index("{")
+        end = text.rindex("}") + 1
+        parsed = json.loads(text[start:end])
+        if isinstance(parsed, dict):
+            for v in parsed.values():
+                if isinstance(v, list):
+                    return v
+    except (ValueError, json.JSONDecodeError):
+        pass
+
+    # Strategy 4: Fix common JSON errors and retry
+    try:
+        # Remove trailing commas before ] or }
+        fixed = re.sub(r',\s*([}\]])', r'\1', text)
+        # Fix unquoted keys
+        fixed = re.sub(r'(\{|,)\s*(\w+)\s*:', r'\1 "\2":', fixed)
+        start = fixed.index("[")
+        end = fixed.rindex("]") + 1
+        return json.loads(fixed[start:end])
+    except (ValueError, json.JSONDecodeError):
+        pass
+
+    logger.error(f"All JSON extraction strategies failed. Response preview: {text[:200]}")
+    return None
 
 MARKING_SCHEME = {
     "jee_main": {
@@ -174,39 +232,24 @@ Generate EXACTLY {count} questions. Return ONLY the JSON array."""
 
     response = groq_manager.chat_completion(
         messages=[
-            {"role": "system", "content": "You are an expert exam question creator for JEE and NEET. Return only valid JSON arrays."},
+            {"role": "system", "content": "You are an expert exam question creator for JEE and NEET. You MUST return ONLY a valid JSON object with a 'questions' key containing an array. No other text."},
             {"role": "user", "content": prompt},
         ],
         temperature=0.85,
         max_tokens=8000,
-        response_format={"type": "json_object"},
     )
 
     questions = []
     if response:
-        try:
-            parsed = json.loads(response)
-            if isinstance(parsed, dict):
-                parsed = parsed.get("questions", parsed.get("data", list(parsed.values())[0] if parsed else []))
-            if isinstance(parsed, list):
-                for q in parsed:
-                    q_type = q.get("questionType", question_type)
-                    q["questionType"] = q_type
-                    q["marks"] = marks_map.get(q_type, {"correct": 4, "incorrect": -1, "partial": 0})
-                    q["isAIGenerated"] = True
-                    questions.append(q)
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON parse error: {e}")
-            try:
-                start = response.index("[")
-                end = response.rindex("]") + 1
-                parsed = json.loads(response[start:end])
-                for q in parsed:
-                    q_type = q.get("questionType", question_type)
-                    q["marks"] = marks_map.get(q_type, {"correct": 4, "incorrect": -1, "partial": 0})
-                    q["isAIGenerated"] = True
-                    questions.append(q)
-            except (ValueError, json.JSONDecodeError):
-                logger.error("Failed to parse AI response")
+        parsed_list = _extract_questions_json(response)
+        if parsed_list:
+            for q in parsed_list:
+                q_type = q.get("questionType", question_type)
+                q["questionType"] = q_type
+                q["marks"] = marks_map.get(q_type, {"correct": 4, "incorrect": -1, "partial": 0})
+                q["isAIGenerated"] = True
+                questions.append(q)
+        else:
+            logger.error("Failed to parse any questions from AI response")
 
     return questions[:count]
