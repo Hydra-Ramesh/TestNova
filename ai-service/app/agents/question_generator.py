@@ -16,24 +16,52 @@ from app.services.cache_service import cache_get, cache_set
 logger = logging.getLogger(__name__)
 
 
+def _repair_truncated_json(text: str) -> Optional[str]:
+    """Attempt to repair JSON that was truncated mid-stream."""
+    # Find the last complete object in a truncated array
+    # Look for the last complete }, then close the array and wrapper
+    last_complete = text.rfind("},")
+    if last_complete == -1:
+        last_complete = text.rfind("}")
+    if last_complete == -1:
+        return None
+
+    truncated = text[:last_complete + 1]
+
+    # Count unclosed brackets and braces
+    open_brackets = truncated.count("[") - truncated.count("]")
+    open_braces = truncated.count("{") - truncated.count("}")
+
+    # Close them
+    truncated += "]" * open_brackets
+    truncated += "}" * open_braces
+
+    return truncated
+
+
 def _extract_questions_json(text: str) -> Optional[List[Dict]]:
     """Robustly extract a JSON array of questions from LLM output."""
     if not text:
         return None
 
-    # Strategy 1: Direct parse
-    try:
-        parsed = json.loads(text)
+    def _extract_list_from_parsed(parsed):
         if isinstance(parsed, dict):
             for key in ["questions", "data", "result"]:
                 if key in parsed and isinstance(parsed[key], list):
                     return parsed[key]
-            # Try first list value
             for v in parsed.values():
                 if isinstance(v, list):
                     return v
         if isinstance(parsed, list):
             return parsed
+        return None
+
+    # Strategy 1: Direct parse
+    try:
+        parsed = json.loads(text)
+        result = _extract_list_from_parsed(parsed)
+        if result is not None:
+            return result
     except json.JSONDecodeError:
         pass
 
@@ -50,18 +78,15 @@ def _extract_questions_json(text: str) -> Optional[List[Dict]]:
         start = text.index("{")
         end = text.rindex("}") + 1
         parsed = json.loads(text[start:end])
-        if isinstance(parsed, dict):
-            for v in parsed.values():
-                if isinstance(v, list):
-                    return v
+        result = _extract_list_from_parsed(parsed)
+        if result is not None:
+            return result
     except (ValueError, json.JSONDecodeError):
         pass
 
     # Strategy 4: Fix common JSON errors and retry
     try:
-        # Remove trailing commas before ] or }
         fixed = re.sub(r',\s*([}\]])', r'\1', text)
-        # Fix unquoted keys
         fixed = re.sub(r'(\{|,)\s*(\w+)\s*:', r'\1 "\2":', fixed)
         start = fixed.index("[")
         end = fixed.rindex("]") + 1
@@ -69,7 +94,20 @@ def _extract_questions_json(text: str) -> Optional[List[Dict]]:
     except (ValueError, json.JSONDecodeError):
         pass
 
-    logger.error(f"All JSON extraction strategies failed. Response preview: {text[:200]}")
+    # Strategy 5: Repair truncated JSON (response hit max_tokens)
+    logger.warning("Attempting truncated JSON repair...")
+    repaired = _repair_truncated_json(text)
+    if repaired:
+        try:
+            parsed = json.loads(repaired)
+            result = _extract_list_from_parsed(parsed)
+            if result is not None:
+                logger.info(f"Recovered {len(result)} questions from truncated response")
+                return result
+        except json.JSONDecodeError:
+            pass
+
+    logger.error(f"All JSON extraction strategies failed. Response preview: {text[:300]}")
     return None
 
 MARKING_SCHEME = {
@@ -145,6 +183,10 @@ def generate_questions(
     return questions[:num_questions]
 
 
+# Maximum questions per API call to avoid token truncation
+MAX_BATCH_SIZE = 5
+
+
 def _generate_batch(
     exam_type: str,
     subject: str,
@@ -155,7 +197,55 @@ def _generate_batch(
     section_label: str,
     marks_map: Dict,
 ) -> List[Dict]:
-    """Generate a batch of questions for a specific subject and type."""
+    """Generate a batch of questions, splitting into sub-batches if needed."""
+
+    if count <= MAX_BATCH_SIZE:
+        return _generate_single_batch(
+            exam_type=exam_type,
+            subject=subject,
+            question_type=question_type,
+            count=count,
+            chapters=chapters,
+            difficulty=difficulty,
+            section_label=section_label,
+            marks_map=marks_map,
+        )
+
+    # Split large requests into smaller sub-batches
+    all_questions = []
+    remaining = count
+    while remaining > 0:
+        batch_size = min(remaining, MAX_BATCH_SIZE)
+        batch = _generate_single_batch(
+            exam_type=exam_type,
+            subject=subject,
+            question_type=question_type,
+            count=batch_size,
+            chapters=chapters,
+            difficulty=difficulty,
+            section_label=section_label,
+            marks_map=marks_map,
+        )
+        all_questions.extend(batch)
+        remaining -= batch_size
+        if not batch:
+            logger.warning(f"Sub-batch returned 0 questions, stopping early")
+            break
+
+    return all_questions[:count]
+
+
+def _generate_single_batch(
+    exam_type: str,
+    subject: str,
+    question_type: str,
+    count: int,
+    chapters: List[str],
+    difficulty: str,
+    section_label: str,
+    marks_map: Dict,
+) -> List[Dict]:
+    """Generate a single small batch of questions (max MAX_BATCH_SIZE)."""
 
     # Retrieve RAG context
     rag_context = rag_pipeline.retrieve_context(
@@ -209,34 +299,35 @@ CRITICAL RULES:
 1. Questions MUST be at {exam_type.upper().replace('_', ' ')} exam standard — real exam difficulty
 2. Each question must be UNIQUE, conceptually deep, and application-based
 3. Difficulty levels: easy = direct formula, medium = 2-3 step, hard = multi-concept/tricky
-4. Provide detailed step-by-step solution with formulas
-5. Include concept explanation
+4. Provide a BRIEF 2-3 step solution (keep each step concise, 1-2 sentences max)
+5. Include a SHORT concept explanation (1 sentence)
 6. Questions must test problem-solving, not just recall
 
-Return ONLY a valid JSON array. Each object:
+Return a JSON object with a "questions" key containing an array. Each question object:
 {{
-  "question": "full question text with all necessary data",
+  "question": "question text",
   "questionType": "{question_type}",
   "options": [{{"id": "A", "text": "..."}}, ...] or [],
   "correctAnswer": "A" or ["A","C"] or 42.5,
   "difficulty": "easy|medium|hard",
   "subject": "{subject}",
-  "chapter": "specific chapter name",
+  "chapter": "chapter name",
   "examType": "{exam_type}",
-  "solutionSteps": [{{"step": 1, "content": "Step 1: ..."}}, {{"step": 2, "content": "Step 2: ..."}}],
-  "conceptExplanation": "brief concept explanation",
+  "solutionSteps": [{{"step": 1, "content": "..."}}, {{"step": 2, "content": "..."}}],
+  "conceptExplanation": "brief explanation",
   "tags": ["topic1", "topic2"]
 }}
 
-Generate EXACTLY {count} questions. Return ONLY the JSON array."""
+Return EXACTLY {count} questions in the JSON object."""
 
     response = groq_manager.chat_completion(
         messages=[
-            {"role": "system", "content": "You are an expert exam question creator for JEE and NEET. You MUST return ONLY a valid JSON object with a 'questions' key containing an array. No other text."},
+            {"role": "system", "content": "You are an expert exam question creator for JEE and NEET. Return ONLY valid JSON with a 'questions' key containing the array of questions. No markdown, no extra text."},
             {"role": "user", "content": prompt},
         ],
         temperature=0.85,
-        max_tokens=8000,
+        max_tokens=8192,
+        response_format={"type": "json_object"},
     )
 
     questions = []
@@ -250,6 +341,6 @@ Generate EXACTLY {count} questions. Return ONLY the JSON array."""
                 q["isAIGenerated"] = True
                 questions.append(q)
         else:
-            logger.error("Failed to parse any questions from AI response")
+            logger.error(f"Failed to parse questions from AI response. Length: {len(response)}, ends with: ...{response[-100:]}")
 
     return questions[:count]
